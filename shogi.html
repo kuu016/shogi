@@ -1,0 +1,503 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>将棋ゲーム (勝利判定あり)</title>
+    <style>
+        /* --- スタイルシート (CSS) --- */
+        body {
+            font-family: 'Hiragino Kaku Gothic ProN', 'メイリオ', sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            flex-direction: column;
+            background-color: #f0e6d2;
+            color: #333;
+        }
+
+        .game-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        #shogi-board {
+            display: grid;
+            grid-template-columns: repeat(9, 1fr);
+            width: 450px;
+            height: 450px;
+            background-color: #e6bf83;
+            border: 2px solid #5c3d23;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+        }
+
+        .square {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            border: 1px solid #c8a063;
+            box-sizing: border-box;
+            position: relative;
+        }
+
+        .piece {
+            font-size: 24px;
+            font-weight: bold;
+            cursor: pointer;
+            width: 90%;
+            height: 90%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            border-radius: 4px;
+            user-select: none;
+            transition: transform 0.1s;
+        }
+
+        .piece.gote { /* 後手 */
+            transform: rotate(180deg);
+        }
+        
+        .piece.promoted {
+            color: #c0392b;
+        }
+
+        .square.selected .piece {
+            background-color: rgba(255, 223, 186, 0.8);
+        }
+        
+        .square.valid-move::after {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 20px;
+            height: 20px;
+            background-color: rgba(46, 204, 113, 0.5);
+            border-radius: 50%;
+        }
+        
+        .square.valid-capture::after {
+             background-color: rgba(231, 76, 60, 0.6);
+        }
+
+        .captured-area {
+            min-width: 200px;
+            min-height: 50px;
+            padding: 10px;
+            background-color: #d3b379;
+            border: 1px solid #5c3d23;
+            border-radius: 5px;
+            margin: 15px 0;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 5px;
+        }
+        
+        .captured-area .piece {
+            width: 30px;
+            height: 30px;
+            font-size: 18px;
+        }
+
+        #info-panel {
+            margin: 15px 0;
+            font-size: 1.2em;
+            font-weight: bold;
+            color: #d35400; /* 目立つ色に変更 */
+        }
+        
+        button {
+            margin-top: 15px;
+            padding: 10px 20px;
+            font-size: 16px;
+            cursor: pointer;
+            border: none;
+            border-radius: 5px;
+            background-color: #34495e;
+            color: white;
+            transition: background-color 0.3s;
+        }
+        
+        button:hover {
+            background-color: #2c3e50;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>将棋ゲーム (勝利判定あり)</h1>
+
+    <div class="game-container">
+        <div id="captured-gote" class="captured-area">後手の持ち駒:</div>
+
+        <div id="shogi-board"></div>
+
+        <div id="captured-sente" class="captured-area">先手の持ち駒:</div>
+
+        <div id="info-panel"></div>
+        
+        <button id="reset-button">リセット</button>
+    </div>
+
+<script>
+// --- ゲームのロジック (JavaScript) ---
+
+// --- 定数定義 ---
+const SENTE = 'sente'; // 先手
+const GOTE = 'gote';   // 後手
+
+// 駒の種類
+const PIECES = {
+    OU: { name: '王', promotedName: null },
+    HI: { name: '飛', promotedName: '龍' },
+    KA: { name: '角', promotedName: '馬' },
+    KI: { name: '金', promotedName: null },
+    GI: { name: '銀', promotedName: '成銀' },
+    KE: { name: '桂', promotedName: '成桂' },
+    KY: { name: '香', promotedName: '成香' },
+    FU: { name: '歩', promotedName: 'と' },
+};
+
+// --- ゲーム状態管理 ---
+let board; // 9x9の盤面配列
+let currentPlayer;
+let selectedPiece = null; // { piece, row, col }
+let captured = { [SENTE]: [], [GOTE]: [] };
+let isDropping = null; // 持ち駒を打つ状態か { player, type }
+let gameOver = false; // ★追加: ゲーム終了フラグ
+
+// --- DOM要素 ---
+const boardElement = document.getElementById('shogi-board');
+const capturedSenteElement = document.getElementById('captured-sente');
+const capturedGoteElement = document.getElementById('captured-gote');
+const infoPanel = document.getElementById('info-panel');
+const resetButton = document.getElementById('reset-button');
+
+/**
+ * 駒オブジェクトを生成
+ */
+function createPiece(type, player) {
+    return { type, player, promoted: false };
+}
+
+/**
+ * ゲームの初期化
+ */
+function init() {
+    board = Array(9).fill(null).map(() => Array(9).fill(null));
+    
+    // 初期配置
+    const setup = [
+        ['KY', 'KE', 'GI', 'KI', 'OU', 'KI', 'GI', 'KE', 'KY'],
+        [null, 'HI', null, null, null, null, null, 'KA', null],
+        ['FU', 'FU', 'FU', 'FU', 'FU', 'FU', 'FU', 'FU', 'FU'],
+    ];
+
+    for (let row = 0; row < 3; row++) {
+        for (let col = 0; col < 9; col++) {
+            if (setup[row][col]) {
+                board[row][col] = createPiece(setup[row][col], GOTE);
+                board[8 - row][8 - col] = createPiece(setup[row][col], SENTE);
+            }
+        }
+    }
+
+    currentPlayer = SENTE;
+    selectedPiece = null;
+    isDropping = null;
+    captured = { [SENTE]: [], [GOTE]: [] };
+    gameOver = false; // ★追加: ゲーム終了フラグをリセット
+    
+    renderAll();
+}
+
+/**
+ * 全ての描画を更新
+ */
+function renderAll() {
+    renderBoard();
+    renderCaptured();
+    renderInfo();
+}
+
+
+/**
+ * 盤面を描画
+ */
+function renderBoard() {
+    boardElement.innerHTML = '';
+    const validMoves = selectedPiece ? getValidMoves(selectedPiece.piece, selectedPiece.row, selectedPiece.col) : [];
+    
+    for (let row = 0; row < 9; row++) {
+        for (let col = 0; col < 9; col++) {
+            const square = document.createElement('div');
+            square.className = 'square';
+            square.dataset.row = row;
+            square.dataset.col = col;
+
+            const pieceData = board[row][col];
+            if (pieceData) {
+                const pieceElement = document.createElement('div');
+                pieceElement.className = `piece ${pieceData.player}`;
+                const pieceInfo = PIECES[pieceData.type];
+                pieceElement.innerText = pieceData.promoted ? pieceInfo.promotedName : pieceInfo.name;
+                if(pieceData.promoted) pieceElement.classList.add('promoted');
+                square.appendChild(pieceElement);
+            }
+            
+            if (!gameOver) { // ★変更: ゲームオーバーでなければハイライト
+                if(selectedPiece && selectedPiece.row === row && selectedPiece.col === col) {
+                    square.classList.add('selected');
+                }
+                
+                if (isDropping && !pieceData) {
+                    square.classList.add('valid-move');
+                } else if (validMoves.some(m => m.row === row && m.col === col)) {
+                    square.classList.add('valid-move');
+                    if(pieceData) square.classList.add('valid-capture');
+                }
+            }
+
+            square.addEventListener('click', () => onSquareClick(row, col));
+            boardElement.appendChild(square);
+        }
+    }
+}
+
+/**
+ * 持ち駒を描画
+ */
+function renderCaptured() {
+    capturedSenteElement.innerHTML = '先手の持ち駒:';
+    capturedGoteElement.innerHTML = '後手の持ち駒:';
+    
+    [SENTE, GOTE].forEach(player => {
+        const targetElement = player === SENTE ? capturedSenteElement : capturedGoteElement;
+        const capturedPieces = captured[player];
+        capturedPieces.sort().forEach(type => {
+             const pieceElement = document.createElement('div');
+             pieceElement.className = `piece ${player}`;
+             pieceElement.innerText = PIECES[type].name;
+             if (!gameOver) { // ★変更: ゲームオーバーでなければイベント追加
+                pieceElement.addEventListener('click', () => onCapturedPieceClick(type, player));
+             }
+             targetElement.appendChild(pieceElement);
+        });
+    });
+}
+
+/**
+ * 手番・勝敗情報を描画
+ */
+function renderInfo() {
+    if (gameOver) return; // ゲーム終了時はendGame()でメッセージを設定するので何もしない
+    infoPanel.textContent = `手番: ${currentPlayer === SENTE ? '▲先手' : '▽後手'}`;
+}
+
+/**
+ * 盤面のマスがクリックされた時の処理
+ */
+function onSquareClick(row, col) {
+    if (gameOver) return; // ★追加: ゲーム終了なら何もしない
+
+    if (isDropping) { 
+        if (board[row][col] === null) {
+            board[row][col] = createPiece(isDropping.type, currentPlayer);
+            const index = captured[currentPlayer].indexOf(isDropping.type);
+            captured[currentPlayer].splice(index, 1);
+            isDropping = null;
+            switchTurn();
+        }
+        return;
+    }
+
+    const clickedPiece = board[row][col];
+    
+    if (selectedPiece) { 
+        const validMoves = getValidMoves(selectedPiece.piece, selectedPiece.row, selectedPiece.col);
+        const isMoveValid = validMoves.some(m => m.row === row && m.col === col);
+        
+        if (isMoveValid) { 
+            movePiece(selectedPiece.row, selectedPiece.col, row, col);
+            if (!gameOver) { // ★変更: ゲームが続いていれば手番交代
+                switchTurn();
+            } else {
+                renderAll(); // 最終盤面を再描画
+            }
+        } else { 
+            selectedPiece = null;
+            if (clickedPiece && clickedPiece.player === currentPlayer) {
+                selectedPiece = { piece: clickedPiece, row, col };
+            }
+            renderAll();
+        }
+    } else if (clickedPiece && clickedPiece.player === currentPlayer) { 
+        selectedPiece = { piece: clickedPiece, row, col };
+        renderAll();
+    }
+}
+
+/**
+ * 持ち駒がクリックされた時の処理
+ */
+function onCapturedPieceClick(type, player) {
+    if (gameOver) return; // ★追加: ゲーム終了なら何もしない
+    if (player !== currentPlayer) return;
+    
+    selectedPiece = null; 
+    isDropping = { type, player };
+    renderAll();
+}
+
+/**
+ * 駒を移動させる
+ */
+function movePiece(fromRow, fromCol, toRow, toCol) {
+    const pieceToMove = board[fromRow][fromCol];
+    const capturedPiece = board[toRow][toCol];
+
+    // ★★★ここから変更点★★★
+    if (capturedPiece) {
+        // 王が取られたかチェック
+        if (capturedPiece.type === 'OU') {
+            board[toRow][toCol] = pieceToMove; // 王を取る動きを盤面に反映
+            board[fromRow][fromCol] = null;
+            endGame(); // ゲーム終了処理を呼び出す
+            return; // この関数を終了
+        }
+        
+        let unpromotedType = Object.keys(PIECES).find(key => PIECES[key] === PIECES[capturedPiece.type]);
+        captured[currentPlayer].push(unpromotedType);
+    }
+    // ★★★ここまで変更点★★★
+    
+    // 成りの確認
+    const canPromote = 
+        (pieceToMove.player === SENTE && toRow <= 2) || 
+        (pieceToMove.player === GOTE && toRow >= 6);
+    
+    if (canPromote && PIECES[pieceToMove.type].promotedName && !pieceToMove.promoted) {
+        if(confirm('成りますか？')) {
+            pieceToMove.promoted = true;
+        }
+    }
+
+    board[toRow][toCol] = pieceToMove;
+    board[fromRow][fromCol] = null;
+}
+
+/**
+ * ★追加: ゲームを終了させる関数
+ */
+function endGame() {
+    gameOver = true;
+    const winner = currentPlayer === SENTE ? '▲先手' : '▽後手';
+    infoPanel.innerHTML = ` ${winner}の勝ちです！ <br>「リセット」で新しいゲームを開始できます。`;
+    selectedPiece = null; // 駒の選択を解除
+    isDropping = null;
+}
+
+/**
+ * 手番を交代
+ */
+function switchTurn() {
+    currentPlayer = (currentPlayer === SENTE) ? GOTE : SENTE;
+    selectedPiece = null;
+    isDropping = null;
+    renderAll();
+}
+
+/**
+ * 駒の移動可能なマスを取得 (この関数に変更はありません)
+ */
+function getValidMoves(piece, row, col) {
+    const moves = [];
+    const player = piece.player;
+    const dir = (player === SENTE) ? -1 : 1; // 先手は-1(上), 後手は+1(下)
+
+    const addMove = (r, c) => {
+        if (r < 0 || r >= 9 || c < 0 || c >= 9) return false; 
+        const target = board[r][c];
+        if (target && target.player === player) return false; 
+        moves.push({ row: r, col: c });
+        return !target;
+    };
+    
+    const addLineMoves = (dr, dc) => {
+        for (let i = 1; i < 9; i++) {
+            if (!addMove(row + i * dr, col + i * dc)) break;
+        }
+    };
+    
+    const pieceType = piece.promoted ? `P_${piece.type}` : piece.type;
+
+    switch (pieceType) {
+        case 'FU': addMove(row + dir, col); break;
+        case 'KY': addLineMoves(dir, 0); break;
+        case 'KE': 
+            addMove(row + dir * 2, col - 1);
+            addMove(row + dir * 2, col + 1);
+            break;
+        case 'GI':
+            addMove(row + dir, col);
+            addMove(row + dir, col - 1);
+            addMove(row + dir, col + 1);
+            addMove(row - dir, col - 1);
+            addMove(row - dir, col + 1);
+            break;
+        case 'KI':
+        case 'P_FU':
+        case 'P_KY':
+        case 'P_KE':
+        case 'P_GI':
+            addMove(row + dir, col);
+            addMove(row + dir, col - 1);
+            addMove(row + dir, col + 1);
+            addMove(row, col - 1);
+            addMove(row, col + 1);
+            addMove(row - dir, col);
+            break;
+        case 'KA':
+            addLineMoves(1, 1); addLineMoves(1, -1);
+            addLineMoves(-1, 1); addLineMoves(-1, -1);
+            break;
+        case 'HI':
+            addLineMoves(1, 0); addLineMoves(-1, 0);
+            addLineMoves(0, 1); addLineMoves(0, -1);
+            break;
+        case 'OU':
+            for(let dr = -1; dr <= 1; dr++) {
+                for(let dc = -1; dc <= 1; dc++) {
+                    if(dr === 0 && dc === 0) continue;
+                    addMove(row + dr, col + dc);
+                }
+            }
+            break;
+        case 'P_KA': // 馬
+            addLineMoves(1, 1); addLineMoves(1, -1);
+            addLineMoves(-1, 1); addLineMoves(-1, -1);
+            addMove(row + 1, col); addMove(row - 1, col);
+            addMove(row, col + 1); addMove(row, col - 1);
+            break;
+        case 'P_HI': // 龍
+            addLineMoves(1, 0); addLineMoves(-1, 0);
+            addLineMoves(0, 1); addLineMoves(0, -1);
+            addMove(row + 1, col + 1); addMove(row + 1, col - 1);
+            addMove(row - 1, col + 1); addMove(row - 1, col - 1);
+            break;
+    }
+    return moves;
+}
+
+resetButton.addEventListener('click', init);
+
+// --- ゲーム開始 ---
+init();
+
+</script>
+
+</body>
+</html>
